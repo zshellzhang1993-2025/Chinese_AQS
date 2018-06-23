@@ -511,8 +511,7 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
      */
     private transient volatile Node tail;
 
-
-    /* state 以及相关的方法 begin */
+    // region state 以及相关的方法
 
     /**
      * The synchronization state.
@@ -557,10 +556,9 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
         return unsafe.compareAndSwapInt(this, stateOffset, expect, update);
     }
 
-    /* state 以及相关的方法 begin */
+    // endregion
 
-
-    // Queuing utilities
+    // region 一些 wait queue 上的动作工具方法
 
     /**
      * The number of nanoseconds for which it is faster to spin
@@ -570,6 +568,7 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
     static final long spinForTimeoutThreshold = 1000L;
 
     /**
+     * 使用 for (;;) {} 确保 node 一定追加到队尾, 使 node 成为当前的 tail
      * Inserts node into queue, initializing if necessary. See picture above.
      *
      * @param node the node to insert
@@ -578,7 +577,8 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
     private Node enq(final Node node) {
         for (; ; ) {
             Node t = tail;
-            if (t == null) { // Must initialize
+            // 初始化一个头指针
+            if (t == null) {
                 if (compareAndSetHead(new Node()))
                     tail = head;
             } else {
@@ -592,27 +592,29 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
     }
 
     /**
-     * Creates and enqueues node for current thread and given mode.
+     * 创建一个 new node(thread, mode) 并将其加入 wait queue 的队尾 (即使之变成当前时刻的 tail)
      *
-     * @param mode Node.EXCLUSIVE for exclusive, Node.SHARED for shared
+     * @param mode Node.EXCLUSIVE 独占, Node.SHARED 共享
      * @return the new node
      */
     private Node addWaiter(Node mode) {
         Node node = new Node(Thread.currentThread(), mode);
-        // Try the fast path of enq; backup to full enq on failure
-        Node pred = tail;
-        if (pred != null) {
-            node.prev = pred;
-            if (compareAndSetTail(pred, node)) {
-                pred.next = node;
+        // 先快速尝试能否一次性追加到队尾
+        Node pre = tail;
+        if (pre != null) {
+            node.prev = pre;
+            if (compareAndSetTail(pre, node)) {
+                pre.next = node;
                 return node;
             }
         }
+        // 如果尝试失败, 再用传统的 for (;;) {} 连续尝试确保其能追加到队尾
         enq(node);
         return node;
     }
 
     /**
+     * 将当前 node 设为 head, 即使之出队
      * Sets head of queue to be node, thus dequeuing. Called only by
      * acquire methods.  Also nulls out unused fields for sake of GC
      * and to suppress unnecessary signals and traversals.
@@ -726,7 +728,10 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
         }
     }
 
-    // Utilities for various versions of acquire
+    // endregion
+
+
+    // region 针对 独占/共享 两种模式都会使用的 acquire 方法小工具
 
     /**
      * Cancels an ongoing attempt to acquire.
@@ -822,15 +827,18 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
     }
 
     /**
-     * Convenience method to park and then check if interrupted
+     * 阻塞线程, 并检测中断信号
      *
-     * @return {@code true} if interrupted
+     * @return 如果捕获中断信号则返回 {@code true} //todo Thread.interrupted()
      */
-    private final boolean parkAndCheckInterrupt() {
+    private boolean parkAndCheckInterrupt() {
         LockSupport.park(this);
         return Thread.interrupted();
     }
 
+    // endregion
+
+    // region 一堆废话
     /*
      * Various of acquire, varying in exclusive/shared and
      * control modes.  Each is mostly the same, but annoyingly
@@ -839,8 +847,14 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
      * cancel if tryAcquire throws exception) and other control, at
      * least not without hurting performance too much.
      */
+    // endregion
+
+    // region 独占/共享 两种模式, 阻塞排队的逻辑
+
+    // region 独占模式
 
     /**
+     * 在一个 for (;;) {} 里不断尝试:
      * Acquires in exclusive uninterruptible mode for thread already in
      * queue. Used by condition wait methods as well as acquire.
      *
@@ -854,14 +868,14 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
             boolean interrupted = false;
             for (; ; ) {
                 final Node p = node.predecessor();
+                // 如果 node
                 if (p == head && tryAcquire(arg)) {
                     setHead(node);
                     p.next = null; // help GC
                     failed = false;
                     return interrupted;
                 }
-                if (shouldParkAfterFailedAcquire(p, node) &&
-                        parkAndCheckInterrupt())
+                if (shouldParkAfterFailedAcquire(p, node) && parkAndCheckInterrupt())
                     interrupted = true;
             }
         } finally {
@@ -871,6 +885,7 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
     }
 
     /**
+     * 可被中断地尝试获取资源
      * Acquires in exclusive interruptible mode.
      *
      * @param arg the acquire argument
@@ -883,12 +898,11 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
                 final Node p = node.predecessor();
                 if (p == head && tryAcquire(arg)) {
                     setHead(node);
-                    p.next = null; // help GC
                     failed = false;
+                    p.next = null; // help GC
                     return;
                 }
-                if (shouldParkAfterFailedAcquire(p, node) &&
-                        parkAndCheckInterrupt())
+                if (shouldParkAfterFailedAcquire(p, node) && parkAndCheckInterrupt())
                     throw new InterruptedException();
             }
         } finally {
@@ -934,6 +948,10 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
         }
     }
 
+    // endregion
+
+    // region 共享模式
+
     /**
      * Acquires in shared uninterruptible mode.
      *
@@ -957,8 +975,7 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
                         return;
                     }
                 }
-                if (shouldParkAfterFailedAcquire(p, node) &&
-                        parkAndCheckInterrupt())
+                if (shouldParkAfterFailedAcquire(p, node) && parkAndCheckInterrupt())
                     interrupted = true;
             }
         } finally {
@@ -1037,8 +1054,13 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
         }
     }
 
+    // endregion
 
-    /* 用于子类选择性继承 begin */
+    // endregion
+
+    // region 独占/共享 两种模式, 尝试获取/释放资源 的具体逻辑规则, 用于子类选择性继承, 实现核心功能
+
+    // region 独占模式
 
     /**
      * Attempts to acquire in exclusive mode. This method should query
@@ -1095,6 +1117,29 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
     protected boolean tryRelease(int arg) {
         throw new UnsupportedOperationException();
     }
+
+    /**
+     * Returns {@code true} if synchronization is held exclusively with
+     * respect to the current (calling) thread.  This method is invoked
+     * upon each call to a non-waiting {@link ConditionObject} method.
+     * (Waiting methods instead invoke {@link #release}.)
+     * <p>
+     * <p>The default implementation throws {@link
+     * UnsupportedOperationException}. This method is invoked
+     * internally only within {@link ConditionObject} methods, so need
+     * not be defined if conditions are not used.
+     *
+     * @return {@code true} if synchronization is held exclusively;
+     * {@code false} otherwise
+     * @throws UnsupportedOperationException if conditions are not supported
+     */
+    protected boolean isHeldExclusively() {
+        throw new UnsupportedOperationException();
+    }
+
+    // endregion
+
+    // region 共享模式
 
     /**
      * Attempts to acquire in shared mode. This method should query if
@@ -1157,43 +1202,29 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
         throw new UnsupportedOperationException();
     }
 
+    // endregion
+
+    // endregion
+
+
+    // region 独占/共享 两种模式, 用于子类在自己对外提供的方法中调用, 以真正实现同步的功能
+
+    // region 独占模式
+
     /**
-     * Returns {@code true} if synchronization is held exclusively with
-     * respect to the current (calling) thread.  This method is invoked
-     * upon each call to a non-waiting {@link ConditionObject} method.
-     * (Waiting methods instead invoke {@link #release}.)
+     * 独占模式的 acquire, 获取资源, 频繁得被各个子类使用的阻塞方法:
+     * 其实除了子类在调用该方法之前可能有一些 unfair 的设计, 本方法 acquire 中也有一些非公平的味道:
+     * (1) 先 tryAcquire 一次, 成功就直接返回;
+     * (2) 不成功才会去乖乖排队, 而 wait queue 里的 node 必须要等排到队头了才有资格去 tryAcquire, 这就存在不公平;
+     * 当然 Doug Lea 也是为了性能与效率最大化;
      * <p>
-     * <p>The default implementation throws {@link
-     * UnsupportedOperationException}. This method is invoked
-     * internally only within {@link ConditionObject} methods, so need
-     * not be defined if conditions are not used.
+     * 需要注意的是, acquireQueued 方法的第一个参数 {@code addWaiter(Node.EXCLUSIVE)} 做了不止一件事,
+     * 传进去的属性 Node.EXCLUSIVE 会作为参数实例化出一个 Node 对象参与竞争排队;
      *
-     * @return {@code true} if synchronization is held exclusively;
-     * {@code false} otherwise
-     * @throws UnsupportedOperationException if conditions are not supported
-     */
-    protected boolean isHeldExclusively() {
-        throw new UnsupportedOperationException();
-    }
-
-    /* 用于子类选择性继承 end */
-
-
-    /* 用于子类在自己对外提供的方法中调用, 以真正实现同步的功能 */
-
-    /**
-     * Acquires in exclusive mode, ignoring interrupts.  Implemented
-     * by invoking at least once {@link #tryAcquire},
-     * returning on success.  Otherwise the thread is queued, possibly
-     * repeatedly blocking and unblocking, invoking {@link
-     * #tryAcquire} until success.  This method can be used
-     * to implement method {@link Lock#lock}.
-     *
-     * @param arg the acquire argument.  This value is conveyed to
-     *            {@link #tryAcquire} but is otherwise uninterpreted and
-     *            can represent anything you like.
+     * @param arg 该参数透传给了 tryAcquire, 一般由子类自己定义它的具体含义, AQS 中只是作了抽象
      */
     public final void acquire(int arg) {
+        // 先作一次 tryAcquire, 要成功就直接 go 了, 不成的话再去排队
         if (!tryAcquire(arg) && acquireQueued(addWaiter(Node.EXCLUSIVE), arg))
             selfInterrupt();
     }
@@ -1263,6 +1294,9 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
         return false;
     }
 
+    // endregion
+
+    // region 共享模式
 
     /**
      * Acquires in shared mode, ignoring interrupts.  Implemented by
@@ -1341,7 +1375,9 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
         return false;
     }
 
+    // endregion
 
+    // endregion
 
     // Queue inspection methods
 
@@ -2298,21 +2334,21 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
     /**
      * CAS head field. Used only by enq.
      */
-    private final boolean compareAndSetHead(Node update) {
+    private boolean compareAndSetHead(Node update) {
         return unsafe.compareAndSwapObject(this, headOffset, null, update);
     }
 
     /**
      * CAS tail field. Used only by enq.
      */
-    private final boolean compareAndSetTail(Node expect, Node update) {
+    private boolean compareAndSetTail(Node expect, Node update) {
         return unsafe.compareAndSwapObject(this, tailOffset, expect, update);
     }
 
     /**
      * CAS waitStatus field of a node.
      */
-    private static final boolean compareAndSetWaitStatus(Node node, int expect, int update) {
+    private static boolean compareAndSetWaitStatus(Node node, int expect, int update) {
         return unsafe.compareAndSwapInt(node, waitStatusOffset,
                 expect, update);
     }
@@ -2320,7 +2356,7 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
     /**
      * CAS next field of a node.
      */
-    private static final boolean compareAndSetNext(Node node, Node expect, Node update) {
+    private static boolean compareAndSetNext(Node node, Node expect, Node update) {
         return unsafe.compareAndSwapObject(node, nextOffset, expect, update);
     }
 
