@@ -266,11 +266,18 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
     private static final long serialVersionUID = 7373984972572414691L;
 
     /**
-     * Creates a new {@code AbstractQueuedSynchronizer} instance
-     * with initial synchronization state of zero.
+     * Head of the wait queue, lazily initialized.  Except for
+     * initialization, it is modified only via method setHead.  Note:
+     * If head exists, its waitStatus is guaranteed not to be
+     * CANCELLED.
      */
-    protected AbstractQueuedSynchronizer() {
-    }
+    private transient volatile Node head;
+
+    /**
+     * Tail of the wait queue, lazily initialized.  Modified only via
+     * method enq to add new wait node.
+     */
+    private transient volatile Node tail;
 
     /**
      * Wait queue node class.
@@ -498,18 +505,11 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
     }
 
     /**
-     * Head of the wait queue, lazily initialized.  Except for
-     * initialization, it is modified only via method setHead.  Note:
-     * If head exists, its waitStatus is guaranteed not to be
-     * CANCELLED.
+     * Creates a new {@code AbstractQueuedSynchronizer} instance
+     * with initial synchronization state of zero.
      */
-    private transient volatile Node head;
-
-    /**
-     * Tail of the wait queue, lazily initialized.  Modified only via
-     * method enq to add new wait node.
-     */
-    private transient volatile Node tail;
+    protected AbstractQueuedSynchronizer() {
+    }
 
     // region state 以及相关的方法
 
@@ -558,7 +558,7 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
 
     // endregion
 
-    // region 一些 wait queue 上的动作工具方法
+    // region 一些基于 wait queue 的工具小方法
 
     /**
      * The number of nanoseconds for which it is faster to spin
@@ -627,8 +627,11 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
         node.prev = null;
     }
 
+    /* 以下两个方法均用于唤醒自己的后继者, 区别在于: 独占模式只唤醒一个 node, 而共享模式需要唤醒 */
+
     /**
-     * Wakes up node's successor, if one exists.
+     * 独占模式: 只需唤醒 head -> next 这一个 node 即可, 以继任自己
+     * 此方法仅在 release 或 cancel 时才会使用
      *
      * @param node the node
      */
@@ -660,6 +663,7 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
     }
 
     /**
+     * 共享模式: 需要向后传播
      * Release action for shared mode -- signals successor and ensures
      * propagation. (Note: For exclusive mode, release just amounts
      * to calling unparkSuccessor of head if it needs signal.)
@@ -729,7 +733,6 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
     }
 
     // endregion
-
 
     // region 针对 独占/共享 两种模式都会使用的 acquire 方法小工具
 
@@ -849,9 +852,9 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
      */
     // endregion
 
-    // region 独占/共享 两种模式, 阻塞排队的逻辑
+    // region c. 阻塞排队, 等待资源并被唤醒的逻辑
 
-    // region 独占模式
+    /* 独占模式 */
 
     /**
      * 在一个 for (;;) {} 里不断尝试:
@@ -886,6 +889,7 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
 
     /**
      * 可被中断地尝试获取资源
+     * 除了中断这个不同之处外, 与 {@link AbstractQueuedSynchronizer#acquireQueued} 相比,
      * Acquires in exclusive interruptible mode.
      *
      * @param arg the acquire argument
@@ -948,9 +952,7 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
         }
     }
 
-    // endregion
-
-    // region 共享模式
+    /* 共享模式 */
 
     /**
      * Acquires in shared uninterruptible mode.
@@ -1056,11 +1058,9 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
 
     // endregion
 
-    // endregion
+    // region b. 尝试 获取/释放 资源的具体逻辑规则, 由子类选择性继承, 自己实现语义上的特定功能
 
-    // region 独占/共享 两种模式, 尝试获取/释放资源 的具体逻辑规则, 用于子类选择性继承, 实现核心功能
-
-    // region 独占模式
+    /* 独占模式 */
 
     /**
      * Attempts to acquire in exclusive mode. This method should query
@@ -1137,9 +1137,7 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
         throw new UnsupportedOperationException();
     }
 
-    // endregion
-
-    // region 共享模式
+    /* 共享模式 */
 
     /**
      * Attempts to acquire in shared mode. This method should query if
@@ -1204,22 +1202,20 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
 
     // endregion
 
-    // endregion
+    // region a. 用于子类在自己对外提供的方法中调用, 以真正实现同步的功能
 
-
-    // region 独占/共享 两种模式, 用于子类在自己对外提供的方法中调用, 以真正实现同步的功能
-
-    // region 独占模式
+    /* 独占模式 */
 
     /**
-     * 独占模式的 acquire, 获取资源, 频繁得被各个子类使用的阻塞方法:
+     * 独占模式的 acquire, 获取资源, 频繁得被各个子类使用, 如 {@link Lock#lock};
      * 其实除了子类在调用该方法之前可能有一些 unfair 的设计, 本方法 acquire 中也有一些非公平的味道:
      * (1) 先 tryAcquire 一次, 成功就直接返回;
-     * (2) 不成功才会去乖乖排队, 而 wait queue 里的 node 必须要等排到队头了才有资格去 tryAcquire, 这就存在不公平;
+     * (2) 不成功才会去乖乖排队, 而 wait queue 里的 node 必须要等排到队伍中第二个 (node.predecessor() = head) 才有资格去 tryAcquire,
+     * 这就存在不公平;
      * 当然 Doug Lea 也是为了性能与效率最大化;
      * <p>
-     * 需要注意的是, acquireQueued 方法的第一个参数 {@code addWaiter(Node.EXCLUSIVE)} 做了不止一件事,
-     * 传进去的属性 Node.EXCLUSIVE 会作为参数实例化出一个 Node 对象参与竞争排队;
+     * 需要注意的是, acquireQueued 方法的第一个参数 {@link AbstractQueuedSynchronizer#addWaiter(Node mode)} 做了不止一件事,
+     * 传进去的属性(以 Node 实例的形式存在) Node.EXCLUSIVE 会作为参数实例化出一个 Node 对象参与竞争排队;
      *
      * @param arg 该参数透传给了 tryAcquire, 一般由子类自己定义它的具体含义, AQS 中只是作了抽象
      */
@@ -1275,6 +1271,7 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
     }
 
     /**
+     * 独占模式的 release, 释放资源, 与 {@link #acquire(int)} 方法是一对儿, 在子类中的典型应用如: {@link Lock#unlock};
      * Releases in exclusive mode.  Implemented by unblocking one or
      * more threads if {@link #tryRelease} returns true.
      * This method can be used to implement method {@link Lock#unlock}.
@@ -1294,9 +1291,7 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
         return false;
     }
 
-    // endregion
-
-    // region 共享模式
+    /* 共享模式 */
 
     /**
      * Acquires in shared mode, ignoring interrupts.  Implemented by
@@ -1377,9 +1372,7 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
 
     // endregion
 
-    // endregion
-
-    // Queue inspection methods
+    // region Queue inspection methods
 
     /**
      * Queries whether any threads are waiting to acquire. Note that
@@ -1554,8 +1547,9 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
                 ((s = h.next) == null || s.thread != Thread.currentThread());
     }
 
+    // endregion
 
-    // Instrumentation and monitoring methods
+    // region Instrumentation and monitoring methods
 
     /**
      * Returns an estimate of the number of threads waiting to
@@ -1653,8 +1647,9 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
                 "[State = " + s + ", " + q + "empty queue]";
     }
 
+    // endregion
 
-    // Internal support methods for Conditions
+    // region Internal support methods for Conditions
 
     /**
      * Returns true if a node, always one that was initially placed on
@@ -1770,7 +1765,9 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
         }
     }
 
-    // Instrumentation methods for conditions
+    // endregion
+
+    // region Instrumentation methods for conditions
 
     /**
      * Queries whether the given ConditionObject
@@ -2359,5 +2356,7 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
     private static boolean compareAndSetNext(Node node, Node expect, Node update) {
         return unsafe.compareAndSwapObject(node, nextOffset, expect, update);
     }
+
+    // endregion
 
 }
